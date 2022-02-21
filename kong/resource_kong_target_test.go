@@ -1,12 +1,14 @@
 package kong
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
 
-	"github.com/hashicorp/terraform-plugin-sdk/helper/resource"
-	"github.com/hashicorp/terraform-plugin-sdk/terraform"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/terraform"
+	"github.com/kong/go-kong/kong"
 )
 
 func TestAccKongTarget(t *testing.T) {
@@ -21,6 +23,9 @@ func TestAccKongTarget(t *testing.T) {
 					testAccCheckKongTargetExists("kong_target.target"),
 					resource.TestCheckResourceAttr("kong_target.target", "target", "mytarget:4000"),
 					resource.TestCheckResourceAttr("kong_target.target", "weight", "100"),
+					resource.TestCheckResourceAttr("kong_target.target", "tags.#", "2"),
+					resource.TestCheckResourceAttr("kong_target.target", "tags.0", "a"),
+					resource.TestCheckResourceAttr("kong_target.target", "tags.1", "b"),
 				),
 			},
 			{
@@ -29,6 +34,8 @@ func TestAccKongTarget(t *testing.T) {
 					testAccCheckKongTargetExists("kong_target.target"),
 					resource.TestCheckResourceAttr("kong_target.target", "target", "mytarget:4000"),
 					resource.TestCheckResourceAttr("kong_target.target", "weight", "200"),
+					resource.TestCheckResourceAttr("kong_target.target", "tags.#", "1"),
+					resource.TestCheckResourceAttr("kong_target.target", "tags.0", "a"),
 				),
 			},
 		},
@@ -100,7 +107,7 @@ func TestAccKongTargetImport(t *testing.T) {
 
 func testAccCheckKongTargetDestroy(state *terraform.State) error {
 
-	client := testAccProvider.Meta().(*config).adminClient
+	client := testAccProvider.Meta().(*config).adminClient.Targets
 
 	targets := getResourcesByType("kong_target", state)
 
@@ -112,11 +119,11 @@ func testAccCheckKongTargetDestroy(state *terraform.State) error {
 		return nil
 	}
 
-	response, _ := client.Targets().GetTargetsFromUpstreamId(targets[0].Primary.Attributes["upstream_id"])
+	response, _, _ := client.List(context.Background(), kong.String(targets[0].Primary.Attributes["upstream_id"]), nil)
 
 	if response != nil {
 		for _, element := range response {
-			if *element.Id == targets[0].Primary.ID {
+			if *element.ID == targets[0].Primary.ID {
 				return fmt.Errorf("target %s still exists, %+v", targets[0].Primary.ID, response)
 			}
 		}
@@ -139,9 +146,10 @@ func testAccCheckKongTargetExists(resourceKey string) resource.TestCheckFunc {
 		}
 
 		var ids = strings.Split(rs.Primary.ID, "/")
-		api, err := testAccProvider.Meta().(*config).adminClient.Targets().GetTargetsFromUpstreamId(ids[0])
+		client := testAccProvider.Meta().(*config).adminClient.Targets
+		api, _, err := client.List(context.Background(), kong.String(ids[0]), nil)
 
-		if err != nil {
+		if !kong.IsNotFoundErr(err) && err != nil {
 			return err
 		}
 
@@ -150,7 +158,7 @@ func testAccCheckKongTargetExists(resourceKey string) resource.TestCheckFunc {
 		}
 
 		for _, element := range api {
-			if *element.Id == ids[1] {
+			if *element.ID == ids[1] {
 				break
 			}
 
@@ -179,7 +187,8 @@ func testAccCheckKongTargetDoesNotExist(targetResourceKey string, upstreamResour
 			return fmt.Errorf("no upstream ID is set")
 		}
 
-		targets, err := testAccProvider.Meta().(*config).adminClient.Targets().GetTargetsFromUpstreamId(rs.Primary.ID)
+		client := testAccProvider.Meta().(*config).adminClient.Targets
+		targets, _, err := client.List(context.Background(), kong.String(rs.Primary.ID), nil)
 
 		if len(targets) > 0 {
 			return fmt.Errorf("expecting zero target resources found %v", len(targets))
@@ -201,7 +210,8 @@ func deleteUpstream(upstreamResourceKey string) resource.TestCheckFunc {
 			return fmt.Errorf("not found: %s", upstreamResourceKey)
 		}
 
-		if err := testAccProvider.Meta().(*config).adminClient.Upstreams().DeleteById(rs.Primary.ID); err != nil {
+		client := testAccProvider.Meta().(*config).adminClient.Upstreams
+		if err := client.Delete(context.Background(), kong.String(rs.Primary.ID)); err != nil {
 			return fmt.Errorf("could not delete kong upstream: %v", err)
 		}
 
@@ -218,7 +228,8 @@ resource "kong_upstream" "upstream" {
 resource "kong_target" "target" {
 	target			= "mytarget:4000"
 	weight			= 100
-	upstream_id	= "${kong_upstream.upstream.id}"
+	upstream_id	    = "${kong_upstream.upstream.id}"
+    tags            = ["a", "b"]
 }
 `
 const testUpdateTargetConfig = `
@@ -230,7 +241,8 @@ resource "kong_upstream" "upstream" {
 resource "kong_target" "target" {
 	target			= "mytarget:4000"
 	weight			= 200
-	upstream_id	= "${kong_upstream.upstream.id}"
+	upstream_id  	= "${kong_upstream.upstream.id}"
+	tags            = ["a"]
 }
 `
 const testDeleteTargetConfig = `

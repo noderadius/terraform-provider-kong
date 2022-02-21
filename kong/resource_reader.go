@@ -1,8 +1,8 @@
 package kong
 
 import (
-	"github.com/hashicorp/terraform-plugin-sdk/helper/schema"
-	"github.com/kevholditch/gokong"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/kong/go-kong/kong"
 )
 
 func readStringArrayPtrFromResource(d *schema.ResourceData, key string) []*string {
@@ -15,24 +15,45 @@ func readStringArrayPtrFromResource(d *schema.ResourceData, key string) []*strin
 			array = append(array, item)
 		}
 
-		return gokong.StringSlice(array)
+		return kong.StringSlice(array...)
 	}
 
 	return nil
 }
 
-func readIpPortArrayFromResource(d *schema.ResourceData, key string) []*gokong.IpPort {
+func readMapStringArrayFromResource(d *schema.ResourceData, key string) map[string][]string {
+	results := map[string][]string{}
 	if attr, ok := d.GetOk(key); ok {
 		set := attr.(*schema.Set)
-		results := make([]*gokong.IpPort, 0)
 		for _, item := range set.List() {
 			m := item.(map[string]interface{})
-			ipPort := &gokong.IpPort{}
+			if name, ok := m["name"].(string); ok {
+				if values, ok := m["values"].([]interface{}); ok {
+					var vals []string
+					for _, v := range values {
+						vals = append(vals, v.(string))
+					}
+					results[name] = vals
+				}
+			}
+		}
+	}
+
+	return results
+}
+
+func readIpPortArrayFromResource(d *schema.ResourceData, key string) []*kong.CIDRPort {
+	if attr, ok := d.GetOk(key); ok {
+		set := attr.(*schema.Set)
+		results := make([]*kong.CIDRPort, 0)
+		for _, item := range set.List() {
+			m := item.(map[string]interface{})
+			ipPort := &kong.CIDRPort{}
 			if port, ok := m["port"].(int); ok && port != 0 {
 				ipPort.Port = &port
 			}
 			if ip, ok := m["ip"].(string); ok && ip != "" {
-				ipPort.Ip = &ip
+				ipPort.IP = &ip
 			}
 			results = append(results, ipPort)
 		}
@@ -51,42 +72,39 @@ func readArrayFromResource(d *schema.ResourceData, key string) []interface{} {
 	return nil
 }
 
-func readStringFromResource(d *schema.ResourceData, key string) string {
+func readIdPtrFromResource(d *schema.ResourceData, key string) *string {
 	if value, ok := d.GetOk(key); ok {
-		return value.(string)
-	}
-	return ""
-}
-
-func readIdPtrFromResource(d *schema.ResourceData, key string) *gokong.Id {
-	if value, ok := d.GetOk(key); ok {
-		id := gokong.Id(value.(string))
+		id := value.(string)
 		return &id
 	}
 	return nil
 }
 
 func readStringPtrFromResource(d *schema.ResourceData, key string) *string {
-	if value, ok := d.GetOkExists(key); ok {
-		return gokong.String(value.(string))
+	if value, ok := d.GetOk(key); ok {
+		return kong.String(value.(string))
 	}
 	return nil
 }
 
 func readBoolPtrFromResource(d *schema.ResourceData, key string) *bool {
-	return gokong.Bool(d.Get(key).(bool))
-}
-
-func readIntFromResource(d *schema.ResourceData, key string) int {
-	if value, ok := d.GetOk(key); ok {
-		return value.(int)
+	if value, ok := d.GetOkExists(key); ok {
+		return kong.Bool(value.(bool))
 	}
-	return 0
+	return nil
 }
 
 func readIntPtrFromResource(d *schema.ResourceData, key string) *int {
-	if value, ok := d.GetOkExists(key); ok {
-		return gokong.Int(value.(int))
+	if value, ok := d.GetOk(key); ok {
+		return kong.Int(value.(int))
 	}
 	return nil
+}
+
+func readIntWithZeroPtrFromResource(d *schema.ResourceData, key string) *int {
+	value := d.Get(key)
+	if value == nil {
+		return nil
+	}
+	return kong.Int(value.(int))
 }

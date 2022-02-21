@@ -1,11 +1,13 @@
 package kong
 
 import (
+	"context"
 	"fmt"
 	"testing"
 
-	"github.com/hashicorp/terraform-plugin-sdk/helper/resource"
-	"github.com/hashicorp/terraform-plugin-sdk/terraform"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/terraform"
+	"github.com/kong/go-kong/kong"
 )
 
 func TestAccKongService(t *testing.T) {
@@ -26,6 +28,9 @@ func TestAccKongService(t *testing.T) {
 					resource.TestCheckResourceAttr("kong_service.service", "connect_timeout", "1000"),
 					resource.TestCheckResourceAttr("kong_service.service", "write_timeout", "2000"),
 					resource.TestCheckResourceAttr("kong_service.service", "read_timeout", "3000"),
+					resource.TestCheckResourceAttr("kong_service.service", "tags.#", "2"),
+					resource.TestCheckResourceAttr("kong_service.service", "tags.0", "foo"),
+					resource.TestCheckResourceAttr("kong_service.service", "tags.1", "bar"),
 				),
 			},
 			{
@@ -40,11 +45,17 @@ func TestAccKongService(t *testing.T) {
 					resource.TestCheckResourceAttr("kong_service.service", "connect_timeout", "6000"),
 					resource.TestCheckResourceAttr("kong_service.service", "write_timeout", "5000"),
 					resource.TestCheckResourceAttr("kong_service.service", "read_timeout", "4000"),
+					resource.TestCheckResourceAttr("kong_service.service", "tags.#", "1"),
+					resource.TestCheckResourceAttr("kong_service.service", "tags.0", "foo"),
+					resource.TestCheckResourceAttr("kong_service.service", "tls_verify", "true"),
+					resource.TestCheckResourceAttr("kong_service.service", "tls_verify_depth", "2"),
 				),
 			},
 		},
 	})
+}
 
+func TestAccKongDefaultService(t *testing.T) {
 	resource.Test(t, resource.TestCase{
 		Providers:    testAccProviders,
 		CheckDestroy: testAccCheckKongServiceDestroy,
@@ -61,6 +72,68 @@ func TestAccKongService(t *testing.T) {
 				Check: resource.ComposeTestCheckFunc(
 					testAccCheckKongServiceExists("kong_service.service"),
 					resource.TestCheckResourceAttr("kong_service.service", "retries", "0"),
+				),
+			},
+		},
+	})
+}
+
+func TestAccKongServiceWithClientCertificate(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		Providers:    testAccProviders,
+		CheckDestroy: testAccCheckKongServiceDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: fmt.Sprintf(testServiceWithClientCertificateConfig, testCert1, testKey1, testCert2, testKey2),
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckKongServiceExists("kong_service.service"),
+					resource.TestCheckResourceAttr("kong_service.service", "name", "test"),
+					resource.TestCheckResourceAttr("kong_service.service", "protocol", "https"),
+					resource.TestCheckResourceAttr("kong_service.service", "host", "test.org"),
+					func(s *terraform.State) error {
+						module := s.RootModule()
+						cert, ok := module.Resources["kong_certificate.certificate"]
+						if !ok {
+							return fmt.Errorf("could not find certificate resource")
+						}
+
+						service, ok := module.Resources["kong_service.service"]
+						if !ok {
+							return fmt.Errorf("could not find service resource")
+						}
+
+						v, ok := service.Primary.Attributes["client_certificate_id"]
+						if !ok {
+							return fmt.Errorf("could not find client_certificate_id property")
+						}
+
+						if v != cert.Primary.ID {
+							return fmt.Errorf("client_certificate_id does not match certificate id")
+						}
+						return nil
+					},
+					func(s *terraform.State) error {
+						module := s.RootModule()
+						cert, ok := module.Resources["kong_certificate.ca"]
+						if !ok {
+							return fmt.Errorf("could not find ca certificate resource")
+						}
+
+						service, ok := module.Resources["kong_service.service"]
+						if !ok {
+							return fmt.Errorf("could not find service resource")
+						}
+
+						v, ok := service.Primary.Attributes["ca_certificate_ids.0"]
+						if !ok {
+							return fmt.Errorf("could not find ca_certificate_ids property")
+						}
+
+						if v != cert.Primary.ID {
+							return fmt.Errorf("ca_certificate_ids does not match ca certificate id")
+						}
+						return nil
+					},
 				),
 			},
 		},
@@ -88,7 +161,7 @@ func TestAccKongServiceImport(t *testing.T) {
 
 func testAccCheckKongServiceDestroy(state *terraform.State) error {
 
-	client := testAccProvider.Meta().(*config).adminClient
+	client := testAccProvider.Meta().(*config).adminClient.Services
 
 	services := getResourcesByType("kong_service", state)
 
@@ -96,9 +169,9 @@ func testAccCheckKongServiceDestroy(state *terraform.State) error {
 		return fmt.Errorf("expecting only 1 service resource found %v", len(services))
 	}
 
-	response, err := client.Services().GetServiceById(services[0].Primary.ID)
+	response, err := client.Get(context.Background(), kong.String(services[0].Primary.ID))
 
-	if err != nil {
+	if !kong.IsNotFoundErr(err) && err != nil {
 		return fmt.Errorf("error calling get service by id: %v", err)
 	}
 
@@ -122,7 +195,8 @@ func testAccCheckKongServiceExists(resourceKey string) resource.TestCheckFunc {
 			return fmt.Errorf("no ID is set")
 		}
 
-		service, err := testAccProvider.Meta().(*config).adminClient.Services().GetServiceById(rs.Primary.ID)
+		client := testAccProvider.Meta().(*config).adminClient.Services
+		service, err := client.Get(context.Background(), kong.String(rs.Primary.ID))
 
 		if err != nil {
 			return err
@@ -138,27 +212,30 @@ func testAccCheckKongServiceExists(resourceKey string) resource.TestCheckFunc {
 
 const testCreateServiceConfig = `
 resource "kong_service" "service" {
-	name     		= "test"
-	protocol 		= "http"
-	host     		= "test.org"
-	path     		= "/mypath"
-	retries  		= 5
-	connect_timeout = 1000
-	write_timeout 	= 2000
-	read_timeout  	= 3000
-	
+	name     		 = "test"
+	protocol 		 = "http"
+	host     		 = "test.org"
+	path     		 = "/mypath"
+	retries  		 = 5
+	connect_timeout  = 1000
+	write_timeout 	 = 2000
+	read_timeout  	 = 3000
+	tags             = ["foo", "bar"]
 }
 `
 const testUpdateServiceConfig = `
 resource "kong_service" "service" {
-	name     		= "test2"
-	protocol 		= "https"
-	host     		= "test2.org"
-	port     		= 8081
-	path     		= "/"
-	connect_timeout = 6000
-	write_timeout 	= 5000
-	read_timeout  	= 4000
+	name     		 = "test2"
+	protocol 		 = "https"
+	host     		 = "test2.org"
+	port     		 = 8081
+	path     		 = "/"
+	connect_timeout  = 6000
+	write_timeout 	 = 5000
+	read_timeout  	 = 4000
+	tags             = ["foo"]
+	tls_verify       = true
+	tls_verify_depth = 2
 }
 `
 const testCreateServiceConfigZero = `
@@ -186,6 +263,36 @@ resource "kong_service" "service" {
 	retries         = 0
 }
 `
+
+const testServiceWithClientCertificateConfig = `
+resource "kong_certificate" "certificate" {
+	certificate  = <<EOF
+%s
+EOF
+	private_key =  <<EOF
+%s
+EOF
+   snis			= ["foo.com"]
+}
+
+resource "kong_certificate" "ca" {
+	certificate  = <<EOF
+%s
+EOF
+	private_key =  <<EOF
+%s
+EOF
+   snis			= ["ca.com"]
+}
+
+resource "kong_service" "service" {
+	name                  = "test"
+	protocol              = "https"
+	host                  = "test.org"
+	client_certificate_id = kong_certificate.certificate.id
+	ca_certificate_ids    = [kong_certificate.ca.id]
+}`
+
 const testImportServiceConfig = `
 resource "kong_service" "service" {
 	name     		= "test"

@@ -1,59 +1,61 @@
 package kong
 
 import (
+	"context"
 	"fmt"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
 
-	"github.com/hashicorp/terraform-plugin-sdk/helper/schema"
-	"github.com/kevholditch/gokong"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/kong/go-kong/kong"
 )
 
 func resourceKongRoute() *schema.Resource {
 	return &schema.Resource{
-		Create: resourceKongRouteCreate,
-		Read:   resourceKongRouteRead,
-		Delete: resourceKongRouteDelete,
-		Update: resourceKongRouteUpdate,
+		CreateContext: resourceKongRouteCreate,
+		ReadContext:   resourceKongRouteRead,
+		DeleteContext: resourceKongRouteDelete,
+		UpdateContext: resourceKongRouteUpdate,
 		Importer: &schema.ResourceImporter{
 			State: schema.ImportStatePassthrough,
 		},
 
 		Schema: map[string]*schema.Schema{
-			"name": &schema.Schema{
+			"name": {
 				Type:     schema.TypeString,
 				Optional: true,
 				ForceNew: false,
 			},
-			"protocols": &schema.Schema{
+			"protocols": {
 				Type:     schema.TypeList,
 				Required: true,
 				ForceNew: false,
 				Elem:     &schema.Schema{Type: schema.TypeString},
 			},
-			"methods": &schema.Schema{
+			"methods": {
 				Type:     schema.TypeList,
 				Optional: true,
 				ForceNew: false,
 				Elem:     &schema.Schema{Type: schema.TypeString},
 			},
-			"hosts": &schema.Schema{
+			"hosts": {
 				Type:     schema.TypeList,
 				Optional: true,
 				ForceNew: false,
 				Elem:     &schema.Schema{Type: schema.TypeString},
 			},
-			"paths": &schema.Schema{
+			"paths": {
 				Type:     schema.TypeList,
 				Optional: true,
 				ForceNew: false,
 				Elem:     &schema.Schema{Type: schema.TypeString},
 			},
-			"strip_path": &schema.Schema{
+			"strip_path": {
 				Type:     schema.TypeBool,
 				Optional: true,
 				ForceNew: false,
 				Default:  true,
 			},
-			"source": &schema.Schema{
+			"source": {
 				Type:     schema.TypeSet,
 				Optional: true,
 				ForceNew: false,
@@ -70,7 +72,7 @@ func resourceKongRoute() *schema.Resource {
 					},
 				},
 			},
-			"destination": &schema.Schema{
+			"destination": {
 				Type:     schema.TypeSet,
 				Optional: true,
 				ForceNew: false,
@@ -87,135 +89,274 @@ func resourceKongRoute() *schema.Resource {
 					},
 				},
 			},
-			"snis": &schema.Schema{
+			"snis": {
 				Type:     schema.TypeList,
 				Optional: true,
 				ForceNew: false,
 				Elem:     &schema.Schema{Type: schema.TypeString},
 			},
-			"preserve_host": &schema.Schema{
+			"preserve_host": {
 				Type:     schema.TypeBool,
 				Optional: true,
 				ForceNew: false,
 			},
-			"regex_priority": &schema.Schema{
+			"regex_priority": {
 				Type:     schema.TypeInt,
 				Optional: true,
 				ForceNew: false,
 			},
-			"service_id": &schema.Schema{
+			"service_id": {
 				Type:     schema.TypeString,
 				Required: true,
 				ForceNew: false,
+			},
+			"path_handling": {
+				Type:     schema.TypeString,
+				Optional: true,
+				ForceNew: false,
+				Default:  "v0",
+			},
+			"https_redirect_status_code": {
+				Type:     schema.TypeInt,
+				Optional: true,
+				ForceNew: false,
+				Default:  426,
+			},
+			"request_buffering": {
+				Type:     schema.TypeBool,
+				Optional: true,
+				ForceNew: false,
+				Default:  true,
+			},
+			"response_buffering": {
+				Type:     schema.TypeBool,
+				Optional: true,
+				ForceNew: false,
+				Default:  true,
+			},
+			"tags": {
+				Type:     schema.TypeList,
+				Optional: true,
+				ForceNew: false,
+				Elem:     &schema.Schema{Type: schema.TypeString},
+			},
+			"header": {
+				Type:     schema.TypeSet,
+				Optional: true,
+				ForceNew: false,
+				Elem: &schema.Resource{
+					Schema: map[string]*schema.Schema{
+						"name": {
+							Type:     schema.TypeString,
+							Required: true,
+						},
+						"values": {
+							Type:     schema.TypeList,
+							Required: true,
+							Elem: &schema.Schema{
+								Type: schema.TypeString,
+							},
+						},
+					},
+				},
 			},
 		},
 	}
 }
 
-func resourceKongRouteCreate(d *schema.ResourceData, meta interface{}) error {
+func resourceKongRouteCreate(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
 
 	routeRequest := createKongRouteRequestFromResourceData(d)
 
-	route, err := meta.(*config).adminClient.Routes().Create(routeRequest)
+	client := meta.(*config).adminClient.Routes
+	route, err := client.Create(ctx, routeRequest)
 	if err != nil {
-		return fmt.Errorf("failed to create kong route: %v error: %v", routeRequest, err)
+		return diag.FromErr(fmt.Errorf("failed to create kong route: %v error: %v", routeRequest, err))
 	}
 
-	d.SetId(*route.Id)
+	d.SetId(*route.ID)
 
-	return resourceKongRouteRead(d, meta)
+	return resourceKongRouteRead(ctx, d, meta)
 }
 
-func resourceKongRouteUpdate(d *schema.ResourceData, meta interface{}) error {
+func resourceKongRouteUpdate(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
 	d.Partial(false)
 
 	routeRequest := createKongRouteRequestFromResourceData(d)
 
-	_, err := meta.(*config).adminClient.Routes().UpdateById(d.Id(), routeRequest)
+	client := meta.(*config).adminClient.Routes
+
+	_, err := client.Update(ctx, routeRequest)
 
 	if err != nil {
-		return fmt.Errorf("error updating kong route: %s", err)
+		return diag.FromErr(fmt.Errorf("error updating kong route: %s", err))
 	}
 
-	return resourceKongRouteRead(d, meta)
+	return resourceKongRouteRead(ctx, d, meta)
 }
 
-func resourceKongRouteRead(d *schema.ResourceData, meta interface{}) error {
+func resourceKongRouteRead(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
+	var diags diag.Diagnostics
+	client := meta.(*config).adminClient.Routes
+	route, err := client.Get(ctx, kong.String(d.Id()))
 
-	route, err := meta.(*config).adminClient.Routes().GetById(d.Id())
-
-	if err != nil {
-		return fmt.Errorf("could not find kong route: %v", err)
+	if !kong.IsNotFoundErr(err) && err != nil {
+		return diag.FromErr(fmt.Errorf("could not find kong route: %v", err))
 	}
 
 	if route == nil {
 		d.SetId("")
 	} else {
 		if route.Name != nil {
-			d.Set("name", route.Name)
+			err := d.Set("name", route.Name)
+			if err != nil {
+				return diag.FromErr(err)
+			}
 		}
 		if route.Protocols != nil {
-			d.Set("protocols", gokong.StringValueSlice(route.Protocols))
+			err := d.Set("protocols", StringValueSlice(route.Protocols))
+			if err != nil {
+				return diag.FromErr(err)
+			}
 		}
 
 		if route.Methods != nil {
-			d.Set("methods", gokong.StringValueSlice(route.Methods))
+			err := d.Set("methods", StringValueSlice(route.Methods))
+			if err != nil {
+				return diag.FromErr(err)
+			}
 		}
 
 		if route.Hosts != nil {
-			d.Set("hosts", gokong.StringValueSlice(route.Hosts))
+			err := d.Set("hosts", StringValueSlice(route.Hosts))
+			if err != nil {
+				return diag.FromErr(err)
+			}
 		}
 
 		if route.Paths != nil {
-			d.Set("paths", gokong.StringValueSlice(route.Paths))
+			err := d.Set("paths", StringValueSlice(route.Paths))
+			if err != nil {
+				return diag.FromErr(err)
+			}
 		}
 
 		if route.StripPath != nil {
-			d.Set("strip_path", route.StripPath)
+			err := d.Set("strip_path", route.StripPath)
+			if err != nil {
+				return diag.FromErr(err)
+			}
 		}
 
 		if route.Sources != nil {
-			d.Set("source", route.Sources)
+			err := d.Set("source", flattenIpCidrArray(route.Sources))
+			if err != nil {
+				return diag.FromErr(err)
+			}
 		}
 
 		if route.Destinations != nil {
-			d.Set("destination", route.Sources)
+			err := d.Set("destination", flattenIpCidrArray(route.Destinations))
+			if err != nil {
+				return diag.FromErr(err)
+			}
 		}
 
 		if route.PreserveHost != nil {
-			d.Set("preserve_host", route.PreserveHost)
+			err := d.Set("preserve_host", route.PreserveHost)
+			if err != nil {
+				return diag.FromErr(err)
+			}
 		}
 
 		if route.RegexPriority != nil {
-			d.Set("regex_priority", route.RegexPriority)
+			err := d.Set("regex_priority", route.RegexPriority)
+			if err != nil {
+				return diag.FromErr(err)
+			}
 		}
 
-		if route.Snis != nil {
-			d.Set("snis", gokong.StringValueSlice(route.Snis))
+		if route.SNIs != nil {
+			err := d.Set("snis", StringValueSlice(route.SNIs))
+			if err != nil {
+				return diag.FromErr(err)
+			}
 		}
 
 		if route.Service != nil {
-			d.Set("service_id", route.Service)
+			err := d.Set("service_id", route.Service.ID)
+			if err != nil {
+				return diag.FromErr(err)
+			}
+		}
+
+		if route.PathHandling != nil {
+			err := d.Set("path_handling", route.PathHandling)
+			if err != nil {
+				return diag.FromErr(err)
+			}
+		}
+
+		if route.HTTPSRedirectStatusCode != nil {
+			err := d.Set("https_redirect_status_code", route.HTTPSRedirectStatusCode)
+			if err != nil {
+				return diag.FromErr(err)
+			}
+		}
+
+		if route.RequestBuffering != nil {
+			err := d.Set("request_buffering", route.RequestBuffering)
+			if err != nil {
+				return diag.FromErr(err)
+			}
+		}
+
+		if route.ResponseBuffering != nil {
+			err := d.Set("response_buffering", route.ResponseBuffering)
+			if err != nil {
+				return diag.FromErr(err)
+			}
+		}
+
+		err = d.Set("tags", route.Tags)
+		if err != nil {
+			return diag.FromErr(err)
 		}
 
 	}
 
-	return nil
+	return diags
+}
+func flattenIpCidrArray(addresses []*kong.CIDRPort) []map[string]interface{} {
+	var out = make([]map[string]interface{}, len(addresses), len(addresses))
+	for i, v := range addresses {
+		m := make(map[string]interface{})
+		if v.IP != nil {
+			m["ip"] = v.IP
+		}
+		if v.Port != nil {
+			m["port"] = v.Port
+		}
+		out[i] = m
+	}
+	return out
 }
 
-func resourceKongRouteDelete(d *schema.ResourceData, meta interface{}) error {
-
-	err := meta.(*config).adminClient.Routes().DeleteById(d.Id())
+func resourceKongRouteDelete(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
+	var diags diag.Diagnostics
+	client := meta.(*config).adminClient.Routes
+	err := client.Delete(ctx, kong.String(d.Id()))
 
 	if err != nil {
-		return fmt.Errorf("could not delete kong route: %v", err)
+		return diag.FromErr(fmt.Errorf("could not delete kong route: %v", err))
 	}
 
-	return nil
+	return diags
 }
 
-func createKongRouteRequestFromResourceData(d *schema.ResourceData) *gokong.RouteRequest {
-	return &gokong.RouteRequest{
+func createKongRouteRequestFromResourceData(d *schema.ResourceData) *kong.Route {
+
+	route := &kong.Route{
 		Name:          readStringPtrFromResource(d, "name"),
 		Protocols:     readStringArrayPtrFromResource(d, "protocols"),
 		Methods:       readStringArrayPtrFromResource(d, "methods"),
@@ -226,7 +367,19 @@ func createKongRouteRequestFromResourceData(d *schema.ResourceData) *gokong.Rout
 		Destinations:  readIpPortArrayFromResource(d, "destination"),
 		PreserveHost:  readBoolPtrFromResource(d, "preserve_host"),
 		RegexPriority: readIntPtrFromResource(d, "regex_priority"),
-		Snis:          readStringArrayPtrFromResource(d, "snis"),
-		Service:       readIdPtrFromResource(d, "service_id"),
+		SNIs:          readStringArrayPtrFromResource(d, "snis"),
+		Service: &kong.Service{
+			ID: readIdPtrFromResource(d, "service_id"),
+		},
+		PathHandling:            readStringPtrFromResource(d, "path_handling"),
+		HTTPSRedirectStatusCode: readIntPtrFromResource(d, "https_redirect_status_code"),
+		RequestBuffering:        readBoolPtrFromResource(d, "request_buffering"),
+		ResponseBuffering:       readBoolPtrFromResource(d, "response_buffering"),
+		Tags:                    readStringArrayPtrFromResource(d, "tags"),
+		Headers:                 readMapStringArrayFromResource(d, "header"),
 	}
+	if d.Id() != "" {
+		route.ID = kong.String(d.Id())
+	}
+	return route
 }

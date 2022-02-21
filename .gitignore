@@ -1,6 +1,7 @@
 *.dll
 *.exe
 .DS_Store
+.devcontainer
 example.tf
 terraform.tfplan
 terraform.tfstate
@@ -26,6 +27,7 @@ website/node_modules
 dist
 
 website/vendor
+terraform-provider-kong
 
 # Test exclusions
 !command/test-fixtures/**/*.tfstate
